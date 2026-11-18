@@ -443,7 +443,8 @@ public class SupplierAndDashboardTests(FinGuardFactory f)
     [Fact]
     public async Task BankDetailChange_IsRecorded_AndRaisesRisk()
     {
-        var c = await f.AnalystAsync();
+        // Bank-detail changes are admin-only (the analyst path is covered in PaymentAndBankDetailTests).
+        var c = await f.AdminAsync();
         var name = "Bank Change " + Guid.NewGuid().ToString("N")[..6];
         var id = (await ApiClient.ReadAsync(await c.PostAsync("/api/suppliers", AuthorizationTests.NewSupplier(name)))).GetProperty("id").GetGuid();
         var before = (await c.GetJsonAsync($"/api/suppliers/{id}")).GetProperty("risk").GetProperty("score").GetInt32();

@@ -19,6 +19,13 @@ CultureInfo.DefaultThreadCurrentUICulture = CultureInfo.InvariantCulture;
 var builder = WebApplication.CreateBuilder(args);
 var env = builder.Environment;
 
+// ---------- Server limits ----------
+builder.WebHost.ConfigureKestrel(k =>
+{
+    k.AddServerHeader = false;                       // don't advertise the server software
+    k.Limits.MaxRequestBodySize = RequestLimits.UploadBytes; // hard ceiling; JSON endpoints are capped lower below
+});
+
 // ---------- Logging ----------
 builder.Logging.ClearProviders();
 if (env.IsDevelopment()) builder.Logging.AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "HH:mm:ss "; });
@@ -139,8 +146,13 @@ using (var scope = app.Services.CreateScope())
     if (app.Configuration.GetValue("Database:EnsureCreated", false)) await db.Database.EnsureCreatedAsync();
     else await db.Database.MigrateAsync();
 
+    // Keeps stored invoice-number keys in step with the current normalisation rules (idempotent).
+    await InvoiceNumberMaintenance.RefreshAsync(db, app.Logger);
+
     var demo = app.Configuration.GetSection("Demo").Get<DemoOptions>() ?? new DemoOptions();
-    if (demo.Seed) await scope.ServiceProvider.GetRequiredService<DemoSeeder>().SeedAsync(demo);
+    if (demo.Seed && app.Environment.IsProduction())
+        app.Logger.LogError("Demo:Seed is ignored in Production: demo accounts use a published password.");
+    else if (demo.Seed) await scope.ServiceProvider.GetRequiredService<DemoSeeder>().SeedAsync(demo);
 }
 
 // ---------- Pipeline ----------
@@ -149,6 +161,7 @@ app.UseExceptionHandler();
 app.UseStatusCodePages();
 if (!app.Environment.IsDevelopment()) { app.UseHsts(); app.UseHttpsRedirection(); }
 app.UseMiddleware<SecurityHeadersMiddleware>();
+app.UseMiddleware<RequestSizeLimitMiddleware>();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 app.UseCors();

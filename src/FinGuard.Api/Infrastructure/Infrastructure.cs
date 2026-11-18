@@ -97,6 +97,13 @@ public static class Paging
 {
     public static (int page, int size) Normalize(int? page, int? size) =>
         (Math.Max(1, page ?? 1), Math.Clamp(size ?? 20, 1, 100));
+
+    /// <summary>Lower-cased, trimmed search term capped at 100 characters (bounds the cost of LIKE queries).</summary>
+    public static string Term(string q)
+    {
+        var t = q.Trim().ToLowerInvariant();
+        return t.Length > 100 ? t[..100] : t;
+    }
 }
 
 // ---------- Security headers ----------
@@ -115,6 +122,7 @@ public sealed class SecurityHeadersMiddleware(RequestDelegate next)
         h["Referrer-Policy"] = "strict-origin-when-cross-origin";
         h["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=()";
         h["Cross-Origin-Opener-Policy"] = "same-origin";
+        h["Cross-Origin-Resource-Policy"] = "same-origin";
         // The API docs UI needs its own scripts; everything else gets the strict policy.
         if (!ctx.Request.Path.StartsWithSegments("/scalar"))
             h["Content-Security-Policy"] = Csp;
@@ -156,5 +164,35 @@ public sealed class ApiAntiforgeryFilter(Microsoft.AspNetCore.Antiforgery.IAntif
             pd.Extensions["traceId"] = context.HttpContext.TraceIdentifier;
             context.Result = new ObjectResult(pd) { StatusCode = pd.Status };
         }
+    }
+}
+
+// ---------- Request size ----------
+public static class RequestLimits
+{
+    /// <summary>PDF upload endpoints (5 MB file + multipart overhead).</summary>
+    public const long UploadBytes = 6 * 1024 * 1024;
+    /// <summary>Every other request body (JSON). The largest legitimate payload, a 100-line invoice, is far below this.</summary>
+    public const long JsonBytes = 256 * 1024;
+}
+
+/// <summary>
+/// Rejects oversized bodies with 413 before model binding. Upload endpoints (multipart) get the upload limit;
+/// everything else the JSON limit. Kestrel's MaxRequestBodySize is the backstop for bodies without Content-Length.
+/// </summary>
+public sealed class RequestSizeLimitMiddleware(RequestDelegate next)
+{
+    public Task Invoke(HttpContext ctx)
+    {
+        var isUpload = ctx.Request.HasFormContentType;
+        var limit = isUpload ? RequestLimits.UploadBytes : RequestLimits.JsonBytes;
+        if (ctx.Request.ContentLength is { } len && len > limit)
+        {
+            ctx.Response.StatusCode = StatusCodes.Status413PayloadTooLarge;
+            return Task.CompletedTask;
+        }
+        if (!isUpload && ctx.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } f)
+            f.MaxRequestBodySize = RequestLimits.JsonBytes;
+        return next(ctx);
     }
 }

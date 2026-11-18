@@ -238,7 +238,13 @@ Rules:
     public async Task<AssistantResponse> ReplyAsync(IReadOnlyList<AssistantMessage> messages, AssistantFacts facts, List<AssistantReference> refs, CancellationToken ct)
     {
         var o = options.Value;
-        var factsJson = JsonSerializer.Serialize(facts, Json.Options);
+        // Data minimisation: the external model gets financial facts only, never supplier contact details
+        // (emails, phone numbers, postal addresses). IBANs are already masked in every DTO.
+        var minimal = facts with
+        {
+            Suppliers = facts.Suppliers.Select(s => s with { ContactEmail = null, ContactPhone = null, Address = null, Notes = null }).ToList(),
+        };
+        var factsJson = JsonSerializer.Serialize(minimal, Json.Options);
         if (factsJson.Length > 60_000) factsJson = factsJson[..60_000];
         try
         {

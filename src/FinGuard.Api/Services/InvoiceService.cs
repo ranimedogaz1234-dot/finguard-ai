@@ -19,7 +19,7 @@ public class InvoiceService(AppDbContext db, VerificationService verifier, RiskS
         var query = db.Invoices.AsNoTracking().AsQueryable();
         if (!string.IsNullOrWhiteSpace(q.Q))
         {
-            var term = q.Q.Trim().ToLower();
+            var term = Paging.Term(q.Q);
             query = query.Where(i => i.Number.ToLower().Contains(term) || i.Supplier.Name.ToLower().Contains(term)
                                      || (i.PoNumber != null && i.PoNumber.ToLower().Contains(term)));
         }
@@ -82,8 +82,12 @@ public class InvoiceService(AppDbContext db, VerificationService verifier, RiskS
             i.Currency, Cents.To(i.TotalCents), linesTotal, i.Iban is null ? null : Iban.Mask(i.Iban), i.Status.ToString(), i.Decision.ToString(),
             i.VerificationPoints, discrepancies, Summary(i.Decision, discrepancies), i.VerifiedAtUtc,
             Name(i.CreatedById), i.ReviewedById is null ? null : Name(i.ReviewedById), i.ReviewNote, i.ReviewedAtUtc,
-            i.PdfOriginalName, i.IsDemo, lines, alerts, poDto, Permissions(i));
+            i.PdfOriginalName, i.IsDemo, lines, alerts, poDto, Permissions(i, alerts.Count(BlocksPayment)));
     }
+
+    private static bool BlocksPayment(AlertListItem a) =>
+        a.Severity is nameof(AlertSeverity.High) or nameof(AlertSeverity.Critical)
+        && a.Status is not (nameof(AlertStatus.Dismissed) or nameof(AlertStatus.Resolved));
 
     public static string Summary(InvoiceDecision d, IReadOnlyList<DiscrepancyDto> list) => d switch
     {
@@ -93,11 +97,17 @@ public class InvoiceService(AppDbContext db, VerificationService verifier, RiskS
     };
 
     /// <summary>Server-side approval rules (also returned to the UI so buttons reflect the real policy).</summary>
-    public InvoicePermissions Permissions(InvoiceEntity i)
+    public InvoicePermissions Permissions(InvoiceEntity i, int blockingAlerts = 0)
     {
+        if (i.Status == InvoiceStatus.Approved)
+        {
+            if (!user.IsAdmin) return new(false, false, false, "Only administrators can record payments.");
+            if (blockingAlerts > 0)
+                return new(false, false, false, $"Payment is blocked: {blockingAlerts} open high or critical fraud alert(s) on this invoice must be resolved or dismissed first.");
+            return new(false, false, true, null);
+        }
         if (i.Status != InvoiceStatus.Pending)
-            return new(false, false, i.Status == InvoiceStatus.Approved && user.IsAdmin,
-                i.Status == InvoiceStatus.Approved ? (user.IsAdmin ? null : "Only administrators can record payments.") : $"Invoice is already {i.Status}.");
+            return new(false, false, false, $"Invoice is already {i.Status}.");
         string? reason = null;
         if (i.CreatedById == user.Id) reason = "Segregation of duties: you cannot approve an invoice you submitted.";
         else if (!user.IsAdmin && i.Decision == InvoiceDecision.Reject) reason = "The system recommends rejection; only an administrator can override it.";
@@ -168,15 +178,24 @@ public class InvoiceService(AppDbContext db, VerificationService verifier, RiskS
         if (!user.IsAdmin) throw new ForbiddenException("Only administrators can record payments.");
         var inv = await db.Invoices.Include(i => i.Supplier).FirstOrDefaultAsync(i => i.Id == id, ct) ?? throw new NotFoundException("Invoice");
         if (inv.Status != InvoiceStatus.Approved) throw new BusinessRuleException("Only approved invoices can be marked as paid.");
+        // Open high/critical alerts (including confirmed fraud) block payment until they are resolved or dismissed.
+        var blocking = await db.Alerts.CountAsync(a => a.InvoiceId == inv.Id
+            && (a.Severity == AlertSeverity.High || a.Severity == AlertSeverity.Critical)
+            && a.Status != AlertStatus.Dismissed && a.Status != AlertStatus.Resolved, ct);
+        if (blocking > 0)
+            throw new BusinessRuleException($"Payment is blocked: {blocking} open high or critical fraud alert(s) on this invoice must be resolved or dismissed first.", "payment_blocked");
+        if (string.IsNullOrWhiteSpace(inv.Supplier.Iban))
+            throw new BusinessRuleException("The supplier has no verified bank account on record.", "no_verified_account");
         inv.Status = InvoiceStatus.Paid;
         inv.UpdatedAtUtc = clock.GetUtcNow().UtcDateTime;
         db.Payments.Add(new Payment
         {
             SupplierId = inv.SupplierId, InvoiceId = inv.Id, AmountCents = inv.TotalCents, Currency = inv.Currency,
-            Iban = inv.Iban ?? inv.Supplier.Iban, PaidOn = DateOnly.FromDateTime(inv.UpdatedAtUtc), Reference = $"PAY-{inv.Number}",
+            // Always pay the verified account on the supplier record, never an account printed on the invoice.
+            Iban = inv.Supplier.Iban, PaidOn = DateOnly.FromDateTime(inv.UpdatedAtUtc), Reference = $"PAY-{inv.Number}",
             RecordedById = user.Id, IsDemo = inv.IsDemo,
         });
-        audit.Record("invoice.paid", "Invoice", inv.Id.ToString(), $"Payment recorded for {inv.Number} (simulated, no money moved)");
+        audit.Record("invoice.paid", "Invoice", inv.Id.ToString(), $"Payment recorded for {inv.Number} to verified account {Iban.Mask(inv.Supplier.Iban)} (simulated, no money moved)");
         await db.SaveChangesAsync(ct);
     }
 

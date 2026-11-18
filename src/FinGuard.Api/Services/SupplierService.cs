@@ -24,7 +24,7 @@ public class SupplierService(AppDbContext db, RiskService risk, IAuditLog audit,
         };
         if (!string.IsNullOrWhiteSpace(q.Q))
         {
-            var term = q.Q.Trim().ToLower();
+            var term = Paging.Term(q.Q);
             query = query.Where(s => s.Name.ToLower().Contains(term) || s.Category.ToLower().Contains(term)
                                      || (s.TaxId != null && s.TaxId.ToLower().Contains(term)));
         }
@@ -106,6 +106,13 @@ public class SupplierService(AppDbContext db, RiskService risk, IAuditLog audit,
         var newIban = r.KeepExistingIban ? s.Iban : ValidateIban(r.Iban);
         var bankChanged = Iban.Normalize(newIban) != Iban.Normalize(s.Iban);
         var now = clock.GetUtcNow().UtcDateTime;
+        if (bankChanged && !user.IsAdmin)
+        {
+            // Changing where a supplier gets paid is the classic invoice-redirection fraud; it needs an administrator.
+            audit.Record("supplier.bank_change_denied", "Supplier", s.Id.ToString(), $"{s.Name}: bank-detail change attempted by a non-admin");
+            await db.SaveChangesAsync(ct);
+            throw new ForbiddenException("Only administrators can change a supplier's bank details. Verify the change with the supplier through a known contact, then ask an administrator.");
+        }
         if (bankChanged)
         {
             db.BankDetailChanges.Add(new BankDetailChange

@@ -53,7 +53,9 @@ public class AccountController(AuthService auth, UserService users, ICurrentUser
     public async Task<UserDto> Profile(UpdateProfileRequest r, CancellationToken ct)
     {
         var dto = await users.UpdateProfileAsync(r, ct);
-        await auth.SignInAsync(await db.Users.FirstAsync(u => u.Id == me.Id, ct)); // refresh name claim
+        // Refresh the name claim but keep the original sign-in time (no session extension without a password).
+        long.TryParse(User.FindFirst(AuthService.AuthTimeClaim)?.Value, out var authTime);
+        await auth.SignInAsync(await db.Users.FirstAsync(u => u.Id == me.Id, ct), authTime == 0 ? null : authTime);
         return dto;
     }
 
@@ -227,15 +229,23 @@ public class AuditController(AppDbContext db) : ControllerBase
 [ApiController, Route("api/system")]
 public class SystemController(DemoDataService demo, AppDbContext db, IWebHostEnvironment env, Microsoft.Extensions.Options.IOptions<FinanceOptions> finance) : ControllerBase
 {
+    /// <summary>Public, non-sensitive facts the sign-in page needs. Business settings are not exposed anonymously.</summary>
     [HttpGet("info"), AllowAnonymous]
     public async Task<object> Info(CancellationToken ct) => new
     {
         name = "FinGuard AI",
-        environment = env.EnvironmentName,
+        environment = env.IsDevelopment() ? "Development" : "Production",
         demoData = await db.Suppliers.AnyAsync(s => s.IsDemo, ct),
         devOutbox = env.IsDevelopment(),
+    };
+
+    /// <summary>Business configuration for signed-in users (the approval threshold must not be public).</summary>
+    [HttpGet("settings")]
+    public object Settings() => new
+    {
         approvalThreshold = finance.Value.ApprovalThreshold,
         baseCurrency = finance.Value.BaseCurrency,
+        environment = env.EnvironmentName,
     };
 
     [HttpPost("demo/purge"), Authorize(Roles = Roles.Admin)]
@@ -245,7 +255,9 @@ public class SystemController(DemoDataService demo, AppDbContext db, IWebHostEnv
     [HttpGet("dev-outbox"), AllowAnonymous]
     public async Task<IActionResult> Outbox([FromQuery] string email, CancellationToken ct)
     {
-        if (!env.IsDevelopment()) return NotFound();
+        // Development only, and only from this machine: the outbox contains password-reset links.
+        if (!env.IsDevelopment() || HttpContext.Connection.RemoteIpAddress is not { } ip || !System.Net.IPAddress.IsLoopback(ip))
+            return NotFound();
         var to = email.Trim();
         var mails = await db.Outbox.AsNoTracking().Where(m => m.To == to).OrderByDescending(m => m.CreatedAtUtc).Take(5)
             .Select(m => new { m.Subject, m.Body, m.CreatedAtUtc }).ToListAsync(ct);

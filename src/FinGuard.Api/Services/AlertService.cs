@@ -32,7 +32,7 @@ public class AlertService(AppDbContext db, RiskService risk, IAuditLog audit, IC
         if (q.Mine == true) { var me = user.Id; query = query.Where(a => a.AssignedToId == me); }
         if (!string.IsNullOrWhiteSpace(q.Q))
         {
-            var term = q.Q.Trim().ToLower();
+            var term = Paging.Term(q.Q);
             query = int.TryParse(term, out var n)
                 ? query.Where(a => a.Number == n)
                 : query.Where(a => a.Title.ToLower().Contains(term) || a.Supplier.Name.ToLower().Contains(term)

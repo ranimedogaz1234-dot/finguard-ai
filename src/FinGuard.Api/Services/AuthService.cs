@@ -19,6 +19,13 @@ public class AuthOptions
     public int LockoutMinutes { get; set; } = 15;
     public int ResetTokenMinutes { get; set; } = 30;
     public string PublicBaseUrl { get; set; } = "http://localhost:5173";
+    /// <summary>
+    /// Email allowed to become the first administrator on an empty system. When unset, every self-registered
+    /// account is an Analyst, so an open registration page can never hand out admin rights.
+    /// </summary>
+    public string? BootstrapAdminEmail { get; set; }
+    /// <summary>Absolute session lifetime, regardless of activity (sliding expiry alone could keep a session forever).</summary>
+    public int AbsoluteSessionMinutes { get; set; } = 720;
 }
 
 public static class PasswordPolicy
@@ -73,6 +80,7 @@ public class AuthService(
 {
     private readonly AuthOptions _o = options.Value;
     public const string StampClaim = "fg:stamp";
+    public const string AuthTimeClaim = "fg:auth_time";
 
     public static string Normalize(string email) => email.Trim().ToUpperInvariant();
 
@@ -86,12 +94,15 @@ public class AuthService(
         if (await db.Users.AnyAsync(u => u.NormalizedEmail == norm, ct))
             throw new ConflictException("An account with this email already exists.");
 
-        // Bootstrap rule: the very first account on an empty system becomes the administrator.
-        var isFirst = !await db.Users.AnyAsync(ct);
+        // Bootstrap rule: only the configured owner email can become the first administrator, and only while
+        // no administrator exists. Everyone else always starts as an Analyst.
+        var isBootstrapAdmin = !string.IsNullOrWhiteSpace(_o.BootstrapAdminEmail)
+                               && Normalize(_o.BootstrapAdminEmail) == norm
+                               && !await db.Users.AnyAsync(u => u.Role == Roles.Admin, ct);
         var user = new AppUser
         {
             Email = r.Email.Trim(), NormalizedEmail = norm, DisplayName = r.DisplayName.Trim(),
-            Role = isFirst ? Roles.Admin : Roles.Analyst,
+            Role = isBootstrapAdmin ? Roles.Admin : Roles.Analyst,
         };
         user.PasswordHash = hasher.HashPassword(user, r.Password);
         db.Users.Add(user);
@@ -212,7 +223,10 @@ public class AuthService(
         await SignInAsync(user); // re-issue this session with the new stamp; others are invalidated
     }
 
-    public async Task SignInAsync(AppUser user)
+    /// <param name="user">The account to sign in.</param>
+    /// <param name="authTimeUnix">Original authentication time to keep when re-issuing a cookie (e.g. after a profile
+    /// change), so refreshing claims never extends the absolute session lifetime. Null starts a new session.</param>
+    public async Task SignInAsync(AppUser user, long? authTimeUnix = null)
     {
         var claims = new List<Claim>
         {
@@ -221,19 +235,31 @@ public class AuthService(
             new(ClaimTypes.Name, user.DisplayName),
             new(ClaimTypes.Role, user.Role),
             new(StampClaim, user.SecurityStamp),
+            new(AuthTimeClaim, (authTimeUnix ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds()).ToString(System.Globalization.CultureInfo.InvariantCulture)),
         };
         var principal = new ClaimsPrincipal(new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme));
         await http.HttpContext!.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal,
             new AuthenticationProperties { IsPersistent = false, AllowRefresh = true });
     }
 
-    /// <summary>Runs on every authenticated request: rejects cookies for deleted, deactivated or re-stamped accounts.</summary>
+    /// <summary>
+    /// Runs on every authenticated request: rejects cookies for deleted, deactivated or re-stamped accounts,
+    /// role changes, and sessions older than the absolute lifetime.
+    /// </summary>
     public static async Task ValidatePrincipalAsync(CookieValidatePrincipalContext ctx)
     {
         var db = ctx.HttpContext.RequestServices.GetRequiredService<AppDbContext>();
+        var options = ctx.HttpContext.RequestServices.GetRequiredService<IOptions<AuthOptions>>().Value;
         var idClaim = ctx.Principal?.FindFirstValue(ClaimTypes.NameIdentifier);
         var stamp = ctx.Principal?.FindFirstValue(StampClaim);
         if (!Guid.TryParse(idClaim, out var id)) { ctx.RejectPrincipal(); return; }
+        if (!long.TryParse(ctx.Principal?.FindFirstValue(AuthTimeClaim), out var authTime)
+            || DateTimeOffset.UtcNow - DateTimeOffset.FromUnixTimeSeconds(authTime) >= TimeSpan.FromMinutes(options.AbsoluteSessionMinutes))
+        {
+            ctx.RejectPrincipal();
+            await ctx.HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+            return;
+        }
         var user = await db.Users.AsNoTracking().Where(u => u.Id == id)
             .Select(u => new { u.IsActive, u.SecurityStamp, u.Role }).FirstOrDefaultAsync();
         if (user is null || !user.IsActive || user.SecurityStamp != stamp || ctx.Principal!.FindFirstValue(ClaimTypes.Role) != user.Role)

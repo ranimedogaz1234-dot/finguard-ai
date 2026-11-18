@@ -101,21 +101,20 @@ public class PdfExtractionService(AppDbContext db, Microsoft.Extensions.Options.
     {
         FileStorage.ValidatePdf(file, o.Value.MaxPdfBytes);
         string text;
+        await using var ms = new MemoryStream();
+        await file.CopyToAsync(ms, ct);
+        var bytes = ms.ToArray();
         try
         {
-            await using var ms = new MemoryStream();
-            await file.CopyToAsync(ms, ct);
-            using var pdf = PdfDocument.Open(ms.ToArray());
-            var sb = new StringBuilder();
-            foreach (var page in pdf.GetPages().Take(10))
-            {
-                // Rebuild visual lines from word positions; raw page text can run separate lines together.
-                foreach (var line in page.GetWords().GroupBy(w => Math.Round(w.BoundingBox.Bottom / 3)).OrderByDescending(g => g.Key))
-                    sb.AppendLine(string.Join(" ", line.OrderBy(w => w.BoundingBox.Left).Select(w => w.Text)));
-            }
-            text = sb.ToString();
+            // Untrusted input: parse on a worker with a time budget and a page cap so a pathological PDF
+            // cannot tie up the request indefinitely.
+            text = await Task.Run(() => ReadText(bytes), ct).WaitAsync(TimeSpan.FromSeconds(10), ct);
         }
-        catch (Exception ex) when (ex is not BusinessRuleException)
+        catch (TimeoutException)
+        {
+            throw new BusinessRuleException("The PDF took too long to read. Enter the details manually.", "pdf_timeout");
+        }
+        catch (Exception ex) when (ex is not BusinessRuleException and not OperationCanceledException)
         {
             throw new BusinessRuleException("The PDF could not be read. It may be encrypted or damaged.", "unreadable_pdf");
         }
@@ -123,6 +122,20 @@ public class PdfExtractionService(AppDbContext db, Microsoft.Extensions.Options.
         var suppliers = await db.Suppliers.AsNoTracking().Where(s => s.Status == SupplierStatus.Active)
             .Select(s => new { s.Id, s.Name, s.Iban, s.TaxId }).ToListAsync(ct);
         return Parse(text, suppliers.Select(s => new SupplierRef(s.Id, s.Name, s.Iban, s.TaxId)).ToList());
+    }
+
+    private static string ReadText(byte[] bytes)
+    {
+        using var pdf = PdfDocument.Open(bytes);
+        var sb = new StringBuilder();
+        foreach (var page in pdf.GetPages().Take(10))
+        {
+            // Rebuild visual lines from word positions; raw page text can run separate lines together.
+            foreach (var line in page.GetWords().GroupBy(w => Math.Round(w.BoundingBox.Bottom / 3)).OrderByDescending(g => g.Key))
+                sb.AppendLine(string.Join(" ", line.OrderBy(w => w.BoundingBox.Left).Select(w => w.Text)));
+            if (sb.Length > 200_000) break; // enough for any invoice; caps memory on hostile files
+        }
+        return sb.ToString();
     }
 
     public static ExtractionResult Parse(string text, IReadOnlyList<SupplierRef> suppliers)

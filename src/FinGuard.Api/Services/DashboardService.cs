@@ -8,7 +8,7 @@ using Microsoft.Extensions.Options;
 namespace FinGuard.Api.Services;
 
 /// <summary>Every dashboard figure is computed here from stored rows; the UI only renders it.</summary>
-public class DashboardService(AppDbContext db, IOptions<FinanceOptions> finance, TimeProvider clock)
+public class DashboardService(AppDbContext db, IOptions<FinanceOptions> finance, TimeProvider clock, Infrastructure.ICurrentUser user)
 {
     public async Task<DashboardDto> GetAsync(CancellationToken ct)
     {
@@ -70,8 +70,13 @@ public class DashboardService(AppDbContext db, IOptions<FinanceOptions> finance,
         var top = suppliers.OrderByDescending(s => s.RiskScore).ThenBy(s => s.Name).Take(6)
             .Select(s => new TopRiskSupplier(s.Id, s.Name, s.RiskScore, s.RiskLevel, alertCounts.GetValueOrDefault(s.Id))).ToList();
 
-        var activity = await db.AuditLog.AsNoTracking()
-            .Where(a => a.Action != "auth.login_failed" && a.Action != "invoice.pdf_downloaded")
+        // The activity feed shows business events. Sign-ins, account and user-admin events are admin-only (audit log).
+        var activityQuery = db.AuditLog.AsNoTracking()
+            .Where(a => a.Action != "auth.login_failed" && a.Action != "invoice.pdf_downloaded");
+        if (!user.IsAdmin)
+            activityQuery = activityQuery.Where(a => !a.Action.StartsWith("auth.") && !a.Action.StartsWith("user.")
+                                                     && !a.Action.StartsWith("account.") && !a.Action.StartsWith("assistant."));
+        var activity = await activityQuery
             .OrderByDescending(a => a.Id).Take(12)
             .Select(a => new ActivityItem(a.AtUtc, a.UserEmail, a.Action, a.EntityType, a.EntityId, a.Details)).ToListAsync(ct);
 
