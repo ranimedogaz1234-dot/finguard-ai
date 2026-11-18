@@ -74,6 +74,9 @@ export function AssistantPage() {
           {turns.map((t, i) => (
             <div key={i} className={`msg ${t.role}`}>
               {t.role === 'assistant' ? <RichText text={t.content} /> : t.content}
+              {t.role === 'assistant' && t.mode === 'live' && (
+                <p className="subtle" style={{ marginTop: 8 }}>AI-generated from FinGuard data. Verify against the source records before acting.</p>
+              )}
               {t.refs && t.refs.length > 0 && (
                 <div className="row" style={{ marginTop: 8, gap: 6 }}>
                   {t.refs.map((r) => <Link key={r.type + r.id} to={ROUTES[r.type] + r.id} className="chip" style={{ padding: '4px 10px' }}>{r.label} →</Link>)}

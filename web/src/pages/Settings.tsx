@@ -3,7 +3,7 @@ import { Link } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Moon, Sun, Trash2 } from 'lucide-react';
 import { api } from '../api/client';
-import type { SystemInfo, User } from '../api/types';
+import type { SystemInfo, SystemSettings, User } from '../api/types';
 import { useAuth, useTheme } from '../auth';
 import { PageHead } from '../components/Layout';
 import { Card, Field, errorText, useToast } from '../components/ui';
@@ -17,6 +17,7 @@ export function SettingsPage() {
   const [name, setName] = useState(user?.displayName ?? '');
   const [pw, setPw] = useState({ current: '', next: '', confirm: '' });
   const info = useQuery({ queryKey: ['system-info'], queryFn: () => api.get<SystemInfo>('/api/system/info') });
+  const settings = useQuery({ queryKey: ['system-settings'], queryFn: () => api.get<SystemSettings>('/api/system/settings') });
 
   const profile = useMutation({
     mutationFn: () => api.put<User>('/api/account/profile', { displayName: name }),
@@ -63,11 +64,11 @@ export function SettingsPage() {
               <div><button className="btn btn-primary" disabled={password.isPending || !pw.current || pw.next.length < 12 || pwMismatch}>Change password</button></div>
             </form>
           </Card>
-          {info.data && (
+          {info.data && settings.data && (
             <Card title="Platform">
               <dl className="kv">
-                <dt>Environment</dt><dd>{info.data.environment}</dd>
-                <dt>Approval threshold</dt><dd>{money(info.data.approvalThreshold, info.data.baseCurrency)}: admin approval required</dd>
+                <dt>Environment</dt><dd>{settings.data.environment}</dd>
+                <dt>Approval threshold</dt><dd>{money(settings.data.approvalThreshold, settings.data.baseCurrency)}: admin approval required</dd>
                 <dt>Demo data</dt><dd>{info.data.demoData ? 'Loaded (fictional)' : 'Not present'}</dd>
               </dl>
               <p className="subtle" style={{ marginTop: 12 }}>API reference: <Link to="/scalar" reloadDocument style={{ color: 'var(--cyan)' }}>/scalar</Link> (development only).</p>

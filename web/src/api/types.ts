@@ -91,4 +91,5 @@ export interface ChatMessage { role: 'user' | 'assistant'; content: string }
 export interface AssistantReply { reply: string; mode: 'live' | 'local' | 'local-fallback'; model: string | null; references: { type: string; id: string; label: string }[] }
 export interface AssistantStatus { mode: 'live' | 'local'; provider: string | null; model: string | null; description: string }
 export interface Priority { alertNumber: number; alertId: string; title: string; severity: Severity; status: string; supplier: string; supplierRisk: number; exposure: number; priorityScore: number }
-export interface SystemInfo { name: string; environment: string; demoData: boolean; devOutbox: boolean; approvalThreshold: number; baseCurrency: string }
+export interface SystemInfo { name: string; environment: string; demoData: boolean; devOutbox: boolean }
+export interface SystemSettings { approvalThreshold: number; baseCurrency: string; environment: string }

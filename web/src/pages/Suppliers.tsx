@@ -120,6 +120,8 @@ export function SuppliersPage() {
 const EMPTY: SupplierInput = { name: '', country: '', category: '', taxId: null, contactEmail: null, contactPhone: null, address: null, iban: null, currency: 'EUR', annualSpend: 0, paymentTermsDays: 30, notes: null };
 
 export function SupplierFormModal({ supplier, onClose, onSaved }: { supplier?: SupplierDetail; onClose: () => void; onSaved?: (id: string) => void }) {
+  const { isAdmin } = useAuth();
+  const canChangeBank = !supplier || isAdmin; // bank-detail changes are admin-only (enforced by the API)
   const qc = useQueryClient();
   const toast = useToast();
   const [form, setForm] = useState<SupplierInput>(supplier ? {
@@ -165,7 +167,10 @@ export function SupplierFormModal({ supplier, onClose, onSaved }: { supplier?: S
         <Field label="Accounts email" error={fe('contactEmail')}>{(id) => <input id={id} className="input" type="email" value={form.contactEmail ?? ''} onChange={(e) => set('contactEmail', e.target.value || null)} />}</Field>
         <Field label="Phone">{(id) => <input id={id} className="input" value={form.contactPhone ?? ''} onChange={(e) => set('contactPhone', e.target.value || null)} />}</Field>
         <div className="full">
-          {supplier && (
+          {supplier && !canChangeBank && (
+            <div className="callout info"><span>Bank account <span className="mono">{supplier.ibanMasked ?? 'none'}</span> can only be changed by an administrator, after verifying the change with the supplier through a known contact.</span></div>
+          )}
+          {supplier && canChangeBank && (
             <label className="row" style={{ gap: 8, marginBottom: 8, fontSize: 13 }}>
               <input type="checkbox" checked={keepIban} onChange={(e) => setKeepIban(e.target.checked)} /> Keep current bank account ({supplier.ibanMasked ?? 'none'})
             </label>

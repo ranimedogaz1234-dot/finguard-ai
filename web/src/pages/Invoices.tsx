@@ -287,6 +287,7 @@ export function InvoiceDetailPage() {
       {!d ? <Skeleton h={420} /> : (
         <div className="stack">
           {d.status === 'Pending' && d.permissions.reason && <div className="callout info"><span><strong>Approval policy:</strong> {d.permissions.reason}</span></div>}
+          {d.status === 'Approved' && d.permissions.reason && <div className="callout warn"><span><strong>Payment:</strong> {d.permissions.reason}</span></div>}
           <div className="grid grid-3">
             <Card title="Verification result" actions={<><Badge value={d.decision} label={humanize(d.decision)} /><Badge value={d.status} /></>}>
               <div className={`callout ${d.decision === 'AutoApprove' ? 'ok' : d.decision === 'Reject' ? 'danger' : 'warn'}`}>
