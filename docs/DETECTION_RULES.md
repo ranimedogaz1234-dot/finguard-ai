@@ -8,7 +8,7 @@ presented as confirmed fraud** unless an administrator moves the alert to `Confi
 
 | Code | Severity | Rule |
 |---|---|---|
-| `DUPLICATE` | Critical | Same supplier already submitted the same invoice number. Numbers are normalised, so `INV-0042`, `inv 42` and `INV42` match |
+| `DUPLICATE` | Critical | Same supplier already submitted the same invoice number. Numbers are normalised group by group (see below) |
 | `POSSIBLE_DUPLICATE` | Warning | Same supplier, same total and same date, different number |
 | `NO_LINES` / `INVALID_LINE` | Critical | No line items, or a non-positive quantity or negative price |
 | `TOTAL_MISMATCH` | Critical | Declared total ≠ sum of line totals (±0.01) |
@@ -20,6 +20,16 @@ presented as confirmed fraud** unless an administrator moves the alert to `Confi
 | `UNORDERED_ITEM` | Warning | Line not on the PO |
 | `PRICE_INCREASE` | Warning | Unit price above PO unit price |
 | `QUANTITY_EXCEEDS_PO` | Warning | Quantity above ordered quantity |
+
+**Invoice-number normalisation.** A number is split into letter and digit groups at separators, whitespace and
+letter/digit boundaries. Letters are upper-cased and leading zeros are removed from **every** digit group, while
+group boundaries are kept:
+
+| Same invoice | Different invoices |
+|---|---|
+| `AOF-2026-0458` = `aof 2026 458` = `AOF2026/00458` | `INV-12-3` ≠ `INV-1-23` |
+| `INV-0042` = `inv 42` = `INV42` | `INV-100` ≠ `INV-10` |
+| `FAC.2026.000123` = `fac 2026 123` | `AOF-2026-0458` ≠ `AOF-2026-0459` |
 
 **Decision:** `Reject` if any of `DUPLICATE`, `TOTAL_MISMATCH`, `NO_LINES` or `INVALID_LINE` fires; otherwise
 `ManualReview` if any finding exists; otherwise `AutoApprove`. Verification points: Critical 40, Warning 15, capped

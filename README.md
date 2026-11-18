@@ -29,7 +29,7 @@ FinGuard runs **deterministic, documented rules** on every invoice, **explains e
 | Supplier risk analysis | Invoice verification |
 |---|---|
 | ![Supplier risk score with per-factor breakdown](docs/screenshots/supplier.png) | ![Invoice rejected as a duplicate, with explained findings](docs/screenshots/invoice.png) |
-| Every point of the 0–100 score is attributed to a documented factor, with a recommendation and confidence level. | A resubmitted invoice caught by number normalisation (`AOF-2026-0458` = `AOF 2026 458`), with severity-ranked explanations. |
+| Every point of the 0–100 score is attributed to a documented factor, with a recommendation and confidence level. | A resubmitted invoice rejected as a duplicate: `AOF 2026 458` matches the earlier `AOF-2026-0458` because separators, casing and zero-padding are normalised in every number group. |
 
 | Fraud alert investigation | AI financial assistant |
 |---|---|
@@ -50,16 +50,18 @@ FinGuard runs **deterministic, documented rules** on every invoice, **explains e
 - Risk history chart, bank-detail change log, and side-by-side comparison of 2–4 suppliers.
 
 **Invoice verification**
-- 12 verification rules: duplicates with number normalisation, arithmetic, PO match, supplier and currency mismatch, over-PO, price and quantity increases, line validation.
+- 12 verification rules: duplicates, arithmetic, PO match, supplier and currency mismatch, over-PO, price and quantity increases, line validation.
+- Duplicate detection normalises invoice numbers group by group: `AOF-2026-0458`, `aof 2026 458` and `AOF2026/458` match, while `INV-12-3` and `INV-1-23` stay distinct.
 - PDF upload validated by extension, content type **and** file signature. Fields are extracted from text PDFs, and the supplier is matched by IBAN, tax ID or name.
 - Review workflow with **segregation of duties** (you can't approve your own invoice) and admin approval above a threshold or for high-risk suppliers.
+- Payment controls: payments always go to the supplier's verified account, never to an account printed on the invoice, and are blocked while high or critical alerts are open. Only administrators can change bank details.
 - Downloadable, HTML-escaped verification report.
 
 **Fraud detection & alerts**
 - 9 rules: payment-detail mismatch, invalid IBAN, recent bank change, amount outlier, split invoicing, just-below-threshold, round amounts, future dates, duplicate-payment risk.
 - Severity levels, assignment, notes and a full timeline. Workflow transitions are enforced by role, and only administrators can mark an alert *Confirmed fraud*.
 
-**AI financial assistant**: explains risk scores, summarises invoices and alerts, compares suppliers and recommends investigation order. It works with Anthropic or any OpenAI-compatible API, **from the backend only**; the key never reaches the browser.
+**AI financial assistant**: explains risk scores, summarises invoices and alerts, compares suppliers and recommends investigation order. It works with Anthropic or any OpenAI-compatible API, **from the backend only**: the key never reaches the browser, the model only receives financial facts (no supplier contact details), and live answers are labelled as AI-generated.
 
 **Security & administration**: registration, login, logout, password reset, lockout, rate limiting, Admin/Analyst roles, user administration and an audit log. See [Security](#security).
 
@@ -145,6 +147,8 @@ Settings come from `appsettings.json`, are overridden per environment and by env
 | `Finance:ApprovalThreshold` | `10000` | Invoices at or above this need admin approval |
 | `Assistant:Provider` | `None` | `None` (labelled local mode), `Anthropic` or `OpenAI` |
 | `Auth:AllowRegistration` | `true` | Self-registration; new users are Analysts |
+| `Auth:BootstrapAdminEmail` | unset | The only email that can become the first administrator on an empty system |
+| `Auth:AbsoluteSessionMinutes` | `720` | Absolute session lifetime, regardless of activity |
 
 ```bash
 # Enable a live AI model. The key stays on the server.
@@ -169,10 +173,11 @@ All suites were run locally on 18 Nov 2026 (Windows 11, .NET SDK 10.0.404, Node 
 
 | Suite | Scope | Result |
 |---|---|---|
-| Domain unit tests (xUnit) | verification rules, fraud rules, risk scoring, alert workflow, IBAN | **55 / 55 passed** |
-| API integration & security (xUnit + `WebApplicationFactory`, seeded SQLite) | auth, lockout, CSRF, RBAC, object-level access, segregation of duties, uploads, XSS-safe reports, search/filter binding, dashboard consistency, assistant | **43 / 43 passed** |
+| Domain unit tests (xUnit) | verification rules, fraud rules, risk scoring, alert workflow, IBAN | **71 / 71 passed** |
+| API integration & security (xUnit + `WebApplicationFactory`, seeded SQLite) | auth, lockout, CSRF, RBAC, object-level access, segregation of duties, admin bootstrap, absolute session lifetime, bank-detail and payment controls, request limits, information exposure, duplicate detection through the API, uploads, XSS-safe reports, search/filter binding, dashboard consistency, assistant | **60 / 60 passed** |
 | Frontend components (Vitest) | formatting, accessible widgets, safe rendering, login/registration | **13 / 13 passed** |
 | End-to-end (Playwright) | 12 user journeys on desktop Chrome **and** Pixel 7 emulation (24 runs), including a no-horizontal-overflow check on 10 pages, plus 2 screenshot-capture tests | **26 passed**, 2 skipped by design (each capture runs on one viewport) |
+| Dependency audit | `dotnet list package --vulnerable`, `npm audit` (production and development dependencies) | **0 known vulnerabilities** |
 
 Bugs these suites caught during development:
 - configuration was read before the host finished building;
@@ -180,18 +185,20 @@ Bugs these suites caught during development:
 - query-string prefix binding silently dropped list filters;
 - ICU-dependent currency formatting;
 - mobile layout overflow;
-- percent formatting.
+- percent formatting;
+- duplicate detection that missed zero-padded invoice numbers in inner groups (`AOF-2026-0458` vs `AOF 2026 458`).
 
 ## Security
 
-Every control is mapped to OWASP and to the tests that verify it in [docs/SECURITY.md](docs/SECURITY.md). Highlights:
-- deny-by-default authorization, object-level checks and segregation of duties;
-- CSRF tokens, and HttpOnly / `SameSite=Strict` sessions revoked on password or role change;
-- PBKDF2 password hashing, lockout and rate limits;
-- strict CSP and security headers;
-- signature-checked PDF uploads, masked IBANs everywhere, and an audit log of sensitive actions.
+Every control is mapped to OWASP and to the tests that verify it in [docs/SECURITY.md](docs/SECURITY.md), together with the residual risks. Highlights:
 
-No real credentials are in the repository. The only committed password belongs to the **fictional demo accounts** and is used only in the Development environment.
+- **Access control:** deny-by-default authorization, object-level checks on alerts, segregation of duties, and admin-only bank-detail changes, payments and fraud confirmation.
+- **Sessions:** HttpOnly / `SameSite=Strict` cookies, an 8-hour sliding window with a 12-hour absolute limit, and revocation on password reset, role change or deactivation.
+- **Credentials:** PBKDF2 password hashing, lockout and rate limits. Registration never grants admin rights; only a configured owner email can bootstrap the first administrator.
+- **Requests:** CSRF tokens, request-body size limits, strict CSP and security headers.
+- **Data:** signature-checked PDF uploads parsed with a time budget, masked IBANs everywhere, an audit log of sensitive actions including denied bank-detail changes, and no business thresholds exposed to anonymous users.
+
+No real credentials are in the repository. The only committed password belongs to the **fictional demo accounts**, which are seeded in the Development environment only and refused in Production.
 
 ## Limitations & roadmap
 

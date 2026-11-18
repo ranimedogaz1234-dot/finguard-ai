@@ -50,6 +50,7 @@ test('desktop screenshots', async ({ page }, info) => {
   await page.goto('/assistant');
   await page.getByRole('button', { name: 'Why is Crestline Trading LLC high risk?' }).click();
   await expect(page.getByText('Local demonstration mode: this answer', { exact: false })).toBeVisible();
+  await page.evaluate(() => window.scrollTo(0, 0)); // clicking the chip scrolled the page; capture from the top
   await page.waitForTimeout(400);
   await page.screenshot({ path: `${OUT}/assistant.png` });
 });

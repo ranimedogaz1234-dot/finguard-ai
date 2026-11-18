@@ -30,7 +30,7 @@ test('wrong password shows a generic error', async ({ page }) => {
 
 test('dashboard shows computed metrics and demo labelling', async ({ page }) => {
   await login(page, 'analyst@finguard.demo');
-  await expect(page.getByText('fictional demonstration data')).toBeVisible();
+  await expect(page.getByText('fictional demonstration data', { exact: true })).toBeVisible();
   const processed = page.getByRole('link', { name: 'Invoices processed' });
   await expect(processed).toBeVisible();
   await expect(processed.locator('.kpi-value')).toHaveText(/^\d[\d,]*$/);
