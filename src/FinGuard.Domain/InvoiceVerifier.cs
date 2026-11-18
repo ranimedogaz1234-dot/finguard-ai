@@ -89,16 +89,43 @@ public class InvoiceVerifier
         return new(decision, Math.Min(points, 100), d);
     }
 
-    /// <summary>"INV-0042", "inv 42" and "INV42" all normalise to "INV42".</summary>
+    /// <summary>
+    /// Canonical form of an invoice number for duplicate detection.
+    /// The number is split into letter and digit groups (at separators, whitespace and letter/digit boundaries),
+    /// letters are upper-cased and leading zeros are removed from <em>every</em> digit group. Group boundaries are kept,
+    /// so "AOF-2026-0458", "aof 2026 458" and "AOF2026-458" match, while "INV-12-3" and "INV-1-23" stay distinct.
+    /// </summary>
     public static string NormalizeNumber(string number)
     {
-        var chars = number.Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray();
-        var s = new string(chars);
-        // strip leading zeros of the trailing numeric block
-        var i = s.Length;
-        while (i > 0 && char.IsDigit(s[i - 1])) i--;
-        var digits = s[i..].TrimStart('0');
-        return s[..i] + (digits.Length == 0 && i < s.Length ? "0" : digits);
+        var groups = new List<string>();
+        var current = new System.Text.StringBuilder();
+        var currentIsDigit = false;
+        void Flush()
+        {
+            if (current.Length == 0) return;
+            var g = current.ToString();
+            if (currentIsDigit) { g = g.TrimStart('0'); if (g.Length == 0) g = "0"; }
+            groups.Add(g);
+            current.Clear();
+        }
+        foreach (var ch in number ?? "")
+        {
+            if (char.IsAsciiDigit(ch))
+            {
+                if (current.Length > 0 && !currentIsDigit) Flush();
+                currentIsDigit = true;
+                current.Append(ch);
+            }
+            else if (char.IsLetter(ch))
+            {
+                if (current.Length > 0 && currentIsDigit) Flush();
+                currentIsDigit = false;
+                current.Append(char.ToUpperInvariant(ch));
+            }
+            else Flush(); // any separator, whitespace or punctuation ends a group
+        }
+        Flush();
+        return string.Join("-", groups);
     }
 
     internal static string Money(decimal v) => v.ToString("N2", Inv);

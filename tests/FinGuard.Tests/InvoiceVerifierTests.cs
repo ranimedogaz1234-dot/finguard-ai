@@ -144,10 +144,44 @@ public class InvoiceVerifierTests
     }
 
     [Theory]
-    [InlineData("INV-0042", "INV42")]
-    [InlineData("inv 42", "INV42")]
-    [InlineData("A-000", "A0")]
+    [InlineData("INV-0042", "INV-42")]
+    [InlineData("inv 42", "INV-42")]
+    [InlineData("INV42", "INV-42")]
+    [InlineData("A-000", "A-0")]
     [InlineData("ABC", "ABC")]
-    public void NormalizeNumber_Works(string input, string expected) =>
+    [InlineData("AOF-2026-0458", "AOF-2026-458")]
+    [InlineData("  aof 2026 458 ", "AOF-2026-458")]
+    public void NormalizeNumber_ProducesCanonicalGroups(string input, string expected) =>
         Assert.Equal(expected, InvoiceVerifier.NormalizeNumber(input));
+
+    [Theory]
+    [InlineData("AOF-2026-0458", "AOF 2026 458")]      // zero padding inside a middle group
+    [InlineData("AOF-2026-0458", "aof/2026/00458")]    // separators, casing, extra padding
+    [InlineData("INV-2026-0042", "INV2026-42")]        // letter/digit boundary instead of a separator
+    [InlineData("FAC.2026.000123", "fac 2026 123")]    // dots and whitespace
+    [InlineData("2026/0458", "2026-458")]              // purely numeric with groups
+    [InlineData("SSW-2611-090", "ssw 2611 90")]
+    public void EquivalentFormatting_NormalisesToTheSameNumber(string a, string b) =>
+        Assert.Equal(InvoiceVerifier.NormalizeNumber(a), InvoiceVerifier.NormalizeNumber(b));
+
+    [Theory]
+    [InlineData("INV-12-3", "INV-1-23")]               // same digits, different grouping
+    [InlineData("AOF-2026-0458", "AOF-2026-0459")]     // different sequence number
+    [InlineData("AOF-2026-458", "AOF-2025-458")]       // different year
+    [InlineData("INV-100", "INV-10")]                  // trailing zeros are significant
+    [InlineData("A1B2", "A12B")]
+    [InlineData("INV-42", "INV-42-1")]                 // extra group
+    public void DifferentNumbers_StayDistinct(string a, string b) =>
+        Assert.NotEqual(InvoiceVerifier.NormalizeNumber(a), InvoiceVerifier.NormalizeNumber(b));
+
+    [Fact]
+    public void ResubmissionWithDifferentZeroPadding_IsRejectedAsDuplicate()
+    {
+        var original = new Invoice("AOF-2026-0458", Sup, new(2026, 10, 9), "EUR", [new LineItem("Laptop", 1, 100)], 100, "PO-1");
+        var resubmitted = new Invoice("AOF 2026 458", Sup, new(2026, 10, 9), "EUR", [new LineItem("Laptop", 1, 100)], 100, "PO-1");
+        var r = _v.Verify(resubmitted, Po(), [original]);
+        Assert.Equal(InvoiceDecision.Reject, r.Decision);
+        Assert.Contains("DUPLICATE", Codes(r));
+        Assert.DoesNotContain("POSSIBLE_DUPLICATE", Codes(r)); // the stronger finding replaces the weaker one
+    }
 }
