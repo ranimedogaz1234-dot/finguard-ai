@@ -1,11 +1,14 @@
 namespace FinGuard.Domain;
 
+/// <summary>Severity of a single invoice-verification discrepancy.</summary>
 public enum Severity { Info, Warning, Critical }
+
+/// <summary>The rule engine's recommendation. A human still makes the final approval decision.</summary>
 public enum InvoiceDecision { AutoApprove, ManualReview, Reject }
 
 public record LineItem(string Description, decimal Quantity, decimal UnitPrice)
 {
-    public decimal Total => Math.Round(Quantity * UnitPrice, 2);
+    public decimal Total => Math.Round(Quantity * UnitPrice, 2, MidpointRounding.AwayFromZero);
 }
 
 public record Invoice(string Number, Guid SupplierId, DateOnly Date, string Currency,

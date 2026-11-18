@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/FinGuard.Domain/FinGuard.Domain.csproj" />
+    <Project Path="src/FinGuard.Api/FinGuard.Api.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/FinGuard.Tests/FinGuard.Tests.csproj" />
+    <Project Path="tests/FinGuard.Api.Tests/FinGuard.Api.Tests.csproj" />
+  </Folder>
+</Solution>
